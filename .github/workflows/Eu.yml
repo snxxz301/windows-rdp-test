@@ -1,0 +1,54 @@
+name: RDP Windows - Tailscale Login
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Instalar Tailscale
+        shell: powershell
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" `
+            -OutFile "$env:TEMP\tailscale.exe"
+
+          Start-Process `
+            "$env:TEMP\tailscale.exe" `
+            -ArgumentList "/quiet" `
+            -Wait
+
+      - name: Login no Tailscale
+        shell: powershell
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+
+          Write-Host ""
+          Write-Host "=============================================="
+          Write-Host "ABRA O LINK DO TAILSCALE QUE APARECER ABAIXO"
+          Write-Host "E FAÇA LOGIN PELO SEU CELULAR"
+          Write-Host "=============================================="
+          Write-Host ""
+
+          & $ts up --unattended=true --hostname=github-rdp
+
+          $ip = & $ts ip -4
+
+          Write-Host ""
+          Write-Host "TAILSCALE CONECTADO!"
+          Write-Host "IP: $ip"
+
+      - name: Criar usuario RDP
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          $password = ConvertTo-SecureString `
+            $env:RDP_PASSWORD `
+            -AsPlainText `
+            -Force
+
+          if (-not (Get-LocalUser -Name "rdpuser" -Error
