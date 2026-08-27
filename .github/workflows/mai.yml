@@ -1,0 +1,64 @@
+name: RDP Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Instalar Tailscale
+        shell: powershell
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" `
+            -OutFile "$env:TEMP\tailscale.exe"
+
+          Start-Process `
+            "$env:TEMP\tailscale.exe" `
+            -ArgumentList "/quiet" `
+            -Wait
+
+      - name: Conectar ao Tailscale
+        shell: powershell
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          & "C:\Program Files\Tailscale\tailscale.exe" up `
+            --authkey=$env:TS_AUTHKEY `
+            --hostname=github-rdp
+
+      - name: Configurar usuário RDP
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          net user runneradmin "$env:RDP_PASSWORD"
+
+          Set-ItemProperty `
+            -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0
+
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          Set-Service TermService -StartupType Automatic
+          Start-Service TermService
+
+      - name: Mostrar acesso
+        shell: powershell
+        run: |
+          $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+
+          Write-Host "=============================="
+          Write-Host "RDP PRONTO"
+          Write-Host "IP: $ip"
+          Write-Host "Usuario: runneradmin"
+          Write-Host "=============================="
+
+      - name: Manter RDP ligado
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 7000
