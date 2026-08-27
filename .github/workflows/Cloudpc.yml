@@ -1,0 +1,444 @@
+name: Windows RDP Completo
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_minutes:
+        description: "Tempo da sessão"
+        required: true
+        default: "120"
+        type: choice
+        options:
+          - "60"
+          - "120"
+          - "180"
+          - "300"
+
+permissions:
+  contents: read
+
+jobs:
+  rdp:
+    runs-on: windows-2022
+    timeout-minutes: 330
+
+    steps:
+      # =========================================================
+      # 1. MOSTRAR HARDWARE
+      # =========================================================
+      - name: Ver hardware
+        shell: powershell
+        run: |
+          Write-Host "========== CPU =========="
+          Get-CimInstance Win32_Processor |
+            Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+
+          Write-Host "========== RAM =========="
+          Get-CimInstance Win32_ComputerSystem |
+            Select-Object TotalPhysicalMemory
+
+          Write-Host "========== GPU =========="
+          Get-CimInstance Win32_VideoController |
+            Select-Object Name, AdapterRAM
+
+      # =========================================================
+      # 2. MODO DE ALTO DESEMPENHO
+      # =========================================================
+      - name: Ativar alto desempenho
+        shell: powershell
+        run: |
+          powercfg /setactive SCHEME_MIN
+
+          powercfg /change monitor-timeout-ac 0
+          powercfg /change standby-timeout-ac 0
+
+          powercfg /hibernate off
+
+          Write-Host "Plano de energia:"
+          powercfg /getactivescheme
+
+      # =========================================================
+      # 3. INSTALAR PROGRAMAS
+      # =========================================================
+      - name: Instalar programas
+        shell: powershell
+        run: |
+          $packages = @(
+            "googlechrome",
+            "7zip",
+            "vscode",
+            "git",
+            "notepadplusplus"
+          )
+
+          foreach ($package in $packages) {
+            Write-Host ""
+            Write-Host "Instalando $package..."
+
+            choco install $package -y --no-progress
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Aviso: $package não instalou corretamente."
+              $global:LASTEXITCODE = 0
+            }
+          }
+
+      # =========================================================
+      # 4. RUNTIMES
+      # =========================================================
+      - name: Instalar runtimes
+        shell: powershell
+        run: |
+          $packages = @(
+            "vcredist140",
+            "dotnet-desktopruntime",
+            "directx"
+          )
+
+          foreach ($package in $packages) {
+            Write-Host "Instalando runtime: $package"
+
+            choco install $package -y --no-progress
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Runtime $package não pôde ser instalado."
+              $global:LASTEXITCODE = 0
+            }
+          }
+
+      # =========================================================
+      # 5. CRIAR PASTAS
+      # =========================================================
+      - name: Preparar pastas
+        shell: powershell
+        run: |
+          New-Item "C:\Work" -ItemType Directory -Force
+          New-Item "C:\Downloads" -ItemType Directory -Force
+          New-Item "C:\Tools" -ItemType Directory -Force
+          New-Item "C:\RDP" -ItemType Directory -Force
+
+      # =========================================================
+      # 6. OTIMIZAÇÃO LEVE
+      # Não desativa Windows Defender nem serviços importantes
+      # =========================================================
+      - name: Otimizar Windows
+        shell: powershell
+        run: |
+          $services = @(
+            "SysMain",
+            "WSearch",
+            "MapsBroker",
+            "Fax"
+          )
+
+          foreach ($service in $services) {
+            $s = Get-Service $service -ErrorAction SilentlyContinue
+
+            if ($s) {
+              Write-Host "Desativando $service"
+
+              Stop-Service $service -Force -ErrorAction SilentlyContinue
+              Set-Service $service -StartupType Disabled -ErrorAction SilentlyContinue
+            }
+          }
+
+          Remove-Item "$env:TEMP\*" `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+      # =========================================================
+      # 7. PAPEL DE PAREDE + VISUAL
+      # =========================================================
+      - name: Preparar aparência
+        shell: powershell
+        run: |
+          $wallpapers = Get-ChildItem `
+            "C:\Windows\Web\Wallpaper" `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in ".jpg", ".jpeg", ".png"
+            }
+
+          if ($wallpapers) {
+            Copy-Item `
+              $wallpapers[0].FullName `
+              "C:\Users\Public\Pictures\RDP-Wallpaper.jpg" `
+              -Force
+          }
+
+          @'
+          $wallpaper = "C:\Users\Public\Pictures\RDP-Wallpaper.jpg"
+
+          if (Test-Path $wallpaper) {
+              Set-ItemProperty `
+                "HKCU:\Control Panel\Desktop" `
+                -Name Wallpaper `
+                -Value $wallpaper
+
+              Set-ItemProperty `
+                "HKCU:\Control Panel\Desktop" `
+                -Name WallpaperStyle `
+                -Value "10"
+
+              Set-ItemProperty `
+                "HKCU:\Control Panel\Desktop" `
+                -Name TileWallpaper `
+                -Value "0"
+          }
+
+          # Mostrar extensão dos arquivos
+          Set-ItemProperty `
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" `
+            -Name HideFileExt `
+            -Value 0
+
+          # Melhor desempenho visual
+          Set-ItemProperty `
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" `
+            -Name VisualFXSetting `
+            -Value 2
+
+          # Menus mais rápidos
+          Set-ItemProperty `
+            "HKCU:\Control Panel\Desktop" `
+            -Name MenuShowDelay `
+            -Value "20"
+
+          # Ícone "Este Computador" na área de trabalho
+          $desktopIcons = `
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel"
+
+          New-Item $desktopIcons -Force | Out-Null
+
+          New-ItemProperty `
+            $desktopIcons `
+            -Name "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" `
+            -Value 0 `
+            -PropertyType DWord `
+            -Force
+
+          RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters
+          '@ | Set-Content "C:\Tools\CustomizeUser.ps1"
+
+          New-ItemProperty `
+            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" `
+            -Name "RDP-Customize" `
+            -Value 'powershell.exe -ExecutionPolicy Bypass -File "C:\Tools\CustomizeUser.ps1"' `
+            -PropertyType String `
+            -Force
+
+      # =========================================================
+      # 8. ATALHOS NO DESKTOP
+      # =========================================================
+      - name: Criar atalhos
+        shell: powershell
+        run: |
+          $desktop = "C:\Users\Public\Desktop"
+
+          New-Item $desktop -ItemType Directory -Force |
+            Out-Null
+
+          $shell = New-Object -ComObject WScript.Shell
+
+          $apps = @(
+            @{
+              Name = "Google Chrome"
+              Path = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+            },
+            @{
+              Name = "7-Zip"
+              Path = "C:\Program Files\7-Zip\7zFM.exe"
+            },
+            @{
+              Name = "Visual Studio Code"
+              Path = "C:\Program Files\Microsoft VS Code\Code.exe"
+            }
+          )
+
+          foreach ($app in $apps) {
+            if (Test-Path $app.Path) {
+              $shortcut = $shell.CreateShortcut(
+                "$desktop\$($app.Name).lnk"
+              )
+
+              $shortcut.TargetPath = $app.Path
+              $shortcut.Save()
+            }
+          }
+
+      # =========================================================
+      # 9. CRIAR USUÁRIO DO RDP
+      # =========================================================
+      - name: Criar usuário RDP
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
+            throw "Crie o secret RDP_PASSWORD primeiro."
+          }
+
+          $password = ConvertTo-SecureString `
+            $env:RDP_PASSWORD `
+            -AsPlainText `
+            -Force
+
+          $user = Get-LocalUser `
+            -Name "rdpuser" `
+            -ErrorAction SilentlyContinue
+
+          if (-not $user) {
+            New-LocalUser `
+              -Name "rdpuser" `
+              -Password $password `
+              -FullName "RDP User" `
+              -Description "Usuário do RDP" `
+              -PasswordNeverExpires
+          }
+          else {
+            Set-LocalUser `
+              -Name "rdpuser" `
+              -Password $password
+          }
+
+          Add-LocalGroupMember `
+            -Group "Remote Desktop Users" `
+            -Member "rdpuser" `
+            -ErrorAction SilentlyContinue
+
+          Add-LocalGroupMember `
+            -Group "Administrators" `
+            -Member "rdpuser" `
+            -ErrorAction SilentlyContinue
+
+      # =========================================================
+      # 10. ATIVAR RDP
+      # =========================================================
+      - name: Ativar RDP
+        shell: powershell
+        run: |
+          Set-ItemProperty `
+            "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" `
+            -Name fDenyTSConnections `
+            -Value 0
+
+          # Manter Network Level Authentication
+          Set-ItemProperty `
+            "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name UserAuthentication `
+            -Value 1
+
+          Set-Service `
+            TermService `
+            -StartupType Automatic
+
+          Start-Service TermService
+
+          # Bloquear regras RDP abertas
+          Disable-NetFirewallRule `
+            -DisplayGroup "Remote Desktop" `
+            -ErrorAction SilentlyContinue
+
+          # Liberar RDP somente para IPs Tailscale
+          New-NetFirewallRule `
+            -DisplayName "RDP Tailscale TCP" `
+            -Direction Inbound `
+            -Action Allow `
+            -Protocol TCP `
+            -LocalPort 3389 `
+            -RemoteAddress "100.64.0.0/10" `
+            -Profile Any `
+            -ErrorAction SilentlyContinue
+
+          New-NetFirewallRule `
+            -DisplayName "RDP Tailscale UDP" `
+            -Direction Inbound `
+            -Action Allow `
+            -Protocol UDP `
+            -LocalPort 3389 `
+            -RemoteAddress "100.64.0.0/10" `
+            -Profile Any `
+            -ErrorAction SilentlyContinue
+
+      # =========================================================
+      # 11. INSTALAR TAILSCALE
+      # =========================================================
+      - name: Instalar Tailscale
+        shell: powershell
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" `
+            -OutFile "$env:TEMP\tailscale.exe"
+
+          Start-Process `
+            "$env:TEMP\tailscale.exe" `
+            -ArgumentList "/quiet" `
+            -Wait
+
+          Start-Sleep -Seconds 10
+
+      # =========================================================
+      # 12. LOGIN MANUAL NO TAILSCALE
+      # =========================================================
+      - name: Login Tailscale
+        shell: powershell
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+
+          Write-Host ""
+          Write-Host "==========================================="
+          Write-Host "ABRA O LINK ABAIXO E FAÇA LOGIN"
+          Write-Host "==========================================="
+          Write-Host ""
+
+          & $ts up `
+            --hostname=github-rdp-win10 `
+            --unattended=true
+
+          Write-Host ""
+          Write-Host "Tailscale conectado."
+
+      # =========================================================
+      # 13. MOSTRAR DADOS DO RDP
+      # =========================================================
+      - name: Mostrar acesso
+        shell: powershell
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+
+          $ip = & $ts ip -4 |
+            Select-Object -First 1
+
+          Write-Host ""
+          Write-Host "==========================================="
+          Write-Host "WINDOWS RDP PRONTO"
+          Write-Host ""
+          Write-Host "IP: $ip"
+          Write-Host "Usuario: rdpuser"
+          Write-Host "Senha: use seu secret RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "Chrome: instalado"
+          Write-Host "7-Zip: instalado"
+          Write-Host "VS Code: instalado"
+          Write-Host "Git: instalado"
+          Write-Host "Visual C++: instalado"
+          Write-Host ".NET: instalado"
+          Write-Host "DirectX runtime: instalado"
+          Write-Host "Alto desempenho: ativado"
+          Write-Host "==========================================="
+
+      # =========================================================
+      # 14. MANTER SESSÃO ATIVA
+      # =========================================================
+      - name: Manter RDP ativo
+        shell: powershell
+        run: |
+          $minutes = [int]"${{ inputs.session_minutes }}"
+
+          Write-Host "RDP ficará disponível por $minutes minutos."
+
+          Start-Sleep `
+            -Seconds ($minutes * 60)
