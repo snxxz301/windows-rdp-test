@@ -1,0 +1,56 @@
+name: Windows RDP - Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Connect Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Enable Remote Desktop
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          # Ativar RDP
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0
+
+          # Liberar no Firewall
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          # Garantir que o serviço esteja funcionando
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service -Name TermService
+
+          # Definir senha do usuário do runner
+          $user = [ADSI]"WinNT://./runneradmin,user"
+          $user.SetPassword($env:RDP_PASSWORD)
+
+          # Mostrar IP do Tailscale
+          $ip = tailscale ip -4 | Select-Object -First 1
+
+          Write-Host ""
+          Write-Host "=============================="
+          Write-Host "RDP PRONTO"
+          Write-Host "IP: $ip"
+          Write-Host "Usuario: runneradmin"
+          Write-Host "=============================="
+
+      - name: Keep RDP alive
+        shell: powershell
+        run: |
+          Write-Host "RDP ativo."
+          Start-Sleep -Seconds 6900
