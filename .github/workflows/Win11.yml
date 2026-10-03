@@ -1,0 +1,34 @@
+name: Windows RDP com Tailscale
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - name: Baixar e Instalar o Tailscale
+      run: |
+        curl -o tailscale-setup.msi https://tailscale.com
+        msiexec.exe /i tailscale-setup.msi /quiet /norestart
+      shell: cmd
+
+    - name: Aguardar o Serviço do Tailscale Inicializar
+      run: |
+        powershell -Command "Start-Sleep -Seconds 5"
+
+    - name: Login Automático no Tailscale
+      run: |
+        "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTHKEY }}
+      shell: cmd
+
+    - name: Configurar Usuário e Liberar RDP
+      run: |
+        net user runneradmin SenhaSegura123!
+        reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+        netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+      shell: cmd
+
+    - name: Manter a Máquina Ativa (6 Horas)
+      run: |
+        powershell -Command "Start-Sleep -Seconds 21600"
