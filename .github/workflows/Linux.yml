@@ -1,0 +1,24 @@
+name: Teste Linux e Tailscale
+
+on:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Verificar Linux
+        run: |
+          echo "Linux iniciado!"
+          cat /etc/os-release
+          free -h
+
+      - name: Instalar Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Verificar instalação
+        run: |
+          tailscale version
